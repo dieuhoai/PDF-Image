@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "html5-ad-builder"
-version = "0.1.0"
+version = "0.1.1"
 description = "HTML5 Ad Builder — công cụ desktop chạy local (CLI + Web UI)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -13,6 +13,7 @@ dependencies = [
   "pydantic>=2.6",
   "fastapi>=0.110",
   "uvicorn[standard]>=0.27",
+  "pillow>=10.3",          # đo chữ, vẽ ảnh PNG, đọc bố cục từ ảnh mẫu
 ]
 
 [project.optional-dependencies]
