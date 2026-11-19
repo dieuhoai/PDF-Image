@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+"""Bản thay thế tối giản cho lệnh `lipo` của Xcode.
+
+Máy không cài Xcode Command Line Tools thì `/usr/bin/lipo` chỉ là vỏ rỗng, và PyInstaller
+dừng ngay ở bước đóng gói. Nó chỉ dùng đúng hai lệnh — tách một kiến trúc ra khỏi file
+"béo" (`-thin`) và ghép nhiều kiến trúc lại (`-create`) — mà cả hai chỉ là cắt/dán byte
+theo đúng định dạng Mach-O fat, nên viết lại bằng Python được.
+
+Dùng: lipo -thin <arch> <file> -output <out>
+      lipo -create -output <out> <slice> [<slice> ...]
+      lipo -archs <file> | -info <file>
+"""
+from __future__ import annotations
+
+import os
+import shutil
+import struct
+import sys
+
+FAT_MAGIC, FAT_MAGIC_64 = 0xCAFEBABE, 0xCAFEBABF
+MH_MAGIC_64, MH_CIGAM_64 = 0xFEEDFACF, 0xCFFAEDFE
+MH_MAGIC, MH_CIGAM = 0xFEEDFACE, 0xCEFAEDFE
+
+CPU_ARM64, CPU_X86_64, CPU_I386, CPU_ARM = 0x0100000C, 0x01000007, 0x00000007, 0x0000000C
+# (cputype, cpusubtype & 0x00ffffff) -> tên kiến trúc
+NAMES = {
+    (CPU_ARM64, 0): "arm64", (CPU_ARM64, 1): "arm64v8", (CPU_ARM64, 2): "arm64e",
+    (CPU_X86_64, 3): "x86_64", (CPU_X86_64, 8): "x86_64h",
+    (CPU_I386, 3): "i386", (CPU_ARM, 9): "armv7",
+}
+ALIGN = {"arm64": 14, "arm64e": 14, "x86_64": 14, "x86_64h": 14, "i386": 12}
+
+
+def die(msg: str) -> None:
+    sys.stderr.write(f"lipo: {msg}\n")
+    raise SystemExit(1)
+
+
+def arch_name(cputype: int, cpusubtype: int) -> str:
+    return NAMES.get((cputype, cpusubtype & 0x00FFFFFF), f"unknown({cputype},{cpusubtype})")
+
+
+def read_slices(path: str) -> list[dict]:
+    """Các lát kiến trúc trong file. File mỏng thì trả về đúng một lát là chính nó."""
+    with open(path, "rb") as f:
+        data = f.read()
+    if len(data) < 8:
+        die(f"can't figure out the architecture type of: {path}")
+    magic = struct.unpack(">I", data[:4])[0]
+    if magic in (FAT_MAGIC, FAT_MAGIC_64):
+        wide = magic == FAT_MAGIC_64
+        count = struct.unpack(">I", data[4:8])[0]
+        size = 32 if wide else 20
+        out = []
+        for i in range(count):
+            head = data[8 + i * size: 8 + (i + 1) * size]
+            if wide:
+                cpu, sub, off, length, align, _ = struct.unpack(">iiQQII", head)
+            else:
+                cpu, sub, off, length, align = struct.unpack(">iiIII", head)
+            out.append({"arch": arch_name(cpu, sub), "cpu": cpu, "sub": sub, "align": align,
+                        "bytes": data[off:off + length]})
+        return out
+    # file mỏng: đọc thẳng Mach-O header
+    little = magic in (MH_CIGAM, MH_CIGAM_64) or struct.unpack("<I", data[:4])[0] in (MH_MAGIC, MH_MAGIC_64)
+    endian = "<" if little else ">"
+    cpu, sub = struct.unpack(f"{endian}ii", data[4:12])
+    return [{"arch": arch_name(cpu, sub), "cpu": cpu, "sub": sub, "align": 14, "bytes": data}]
+
+
+def write_thin(slices: list[dict], want: str, out: str, src: str) -> None:
+    for s in slices:
+        if s["arch"] == want:
+            with open(out, "wb") as f:
+                f.write(s["bytes"])
+            shutil.copymode(src, out)
+            return
+    die(f"fat input file ({src}) does not contain the specified architecture ({want})")
+
+
+def write_fat(slices: list[dict], out: str) -> None:
+    count = len(slices)
+    offset = 8 + count * 20
+    heads, body = [], bytearray()
+    for s in slices:
+        align = max(s["align"], ALIGN.get(s["arch"], 14))
+        step = 1 << align
+        offset = (offset + step - 1) // step * step
+        while len(body) < offset - (8 + count * 20):
+            body.append(0)
+        heads.append(struct.pack(">iiIII", s["cpu"], s["sub"], offset, len(s["bytes"]), align))
+        body += s["bytes"]
+        offset += len(s["bytes"])
+    with open(out, "wb") as f:
+        f.write(struct.pack(">II", FAT_MAGIC, count))
+        for h in heads:
+            f.write(h)
+        f.write(body)
+    os.chmod(out, 0o755)
+
+
+def main(argv: list[str]) -> int:
+    if not argv:
+        die("no command specified")
+    if argv[0] in ("-archs", "-info"):
+        path = argv[1]
+        names = " ".join(s["arch"] for s in read_slices(path))
+        if argv[0] == "-archs":
+            print(names)
+        elif len(read_slices(path)) > 1:
+            print(f"Architectures in the fat file: {path} are: {names}")
+        else:
+            print(f"Non-fat file: {path} is architecture: {names}")
+        return 0
+    if argv[0] == "-thin":
+        want, src = argv[1], argv[2]
+        if argv[3] != "-output":
+            die("expected -output")
+        write_thin(read_slices(src), want, argv[4], src)
+        return 0
+    if argv[0] == "-create":
+        if argv[1] != "-output":
+            die("expected -output after -create")
+        out, sources = argv[2], argv[3:]
+        slices: list[dict] = []
+        for src in sources:
+            slices.extend(read_slices(src))
+        write_fat(slices, out)
+        return 0
+    die(f"unknown command: {argv[0]}")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

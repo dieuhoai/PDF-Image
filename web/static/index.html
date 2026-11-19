@@ -1,0 +1,550 @@
+<!doctype html>
+<html lang="vi" data-theme="auto">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HTML5 Ad Builder</title>
+  <link rel="stylesheet" href="/static/css/tokens.css">
+  <link rel="stylesheet" href="/static/css/app.css">
+  <script src="/static/js/app.js"></script>
+  <script defer src="/static/vendor/alpine.min.js"></script>
+</head>
+<body>
+<div class="shell" x-data="app()" x-init="init()" x-cloak>
+
+  <header class="topbar">
+    <h1 class="brand" x-text="t('app.title')"></h1>
+    <nav class="steps" :aria-label="t('step.nav')">
+      <template x-for="s in [1,2,3,4]" :key="s">
+        <button class="step" type="button" :class="{ on: step === s, done: step > s }"
+                :data-testid="'step-' + s" :aria-current="step === s ? 'step' : null"
+                @click="goto(s)" :disabled="s > 1 && !sets.length">
+          <span class="step-n" x-text="s"></span>
+          <span class="step-l" x-text="t('step.' + s)"></span>
+        </button>
+      </template>
+    </nav>
+    <div class="topbar-actions">
+      <select class="select" x-model="lang" @change="setLang(lang)" :aria-label="t('settings.language')">
+        <option value="vi">Tiếng Việt</option>
+        <option value="en">English</option>
+      </select>
+      <button class="btn btn-ghost" type="button" @click="toggleTheme()" :aria-label="t('settings.theme')"
+              x-text="theme === 'dark' ? '☾' : '☀'"></button>
+    </div>
+  </header>
+
+  <p class="error banner" role="alert" x-show="error" x-text="error" data-testid="error"></p>
+
+  <main class="content">
+
+    <!-- ============ Bước 1: Nội dung ============ -->
+    <section class="cols" x-show="step === 1">
+      <div class="card">
+        <h2 x-text="t('c.title')"></h2>
+
+        <label class="field">
+          <span><span x-text="t('c.headline')"></span>
+            <b class="count" :class="{ over: draft.headline.length >= 20 }"
+               x-text="draft.headline.length + '/20'"></b></span>
+          <input class="input" data-testid="headline" x-model="draft.headline" maxlength="20"
+                 :placeholder="t('c.headlineHint')">
+        </label>
+
+        <label class="field">
+          <span><span x-text="t('c.description')"></span>
+            <b class="count" :class="{ over: draft.description.length >= 100 }"
+               x-text="draft.description.length + '/100'"></b></span>
+          <textarea class="input ta" data-testid="description" x-model="draft.description" maxlength="100"
+                    rows="2" :placeholder="t('c.descriptionHint')"></textarea>
+        </label>
+
+        <div class="field">
+          <span x-text="t('c.cta')"></span>
+          <div class="chips">
+            <template x-for="p in ctaPresets" :key="p.text">
+              <button class="chip chip-cta" type="button" :class="{ on: draft.cta === p.text }"
+                      @click="draft.cta = p.text; checkCta()">
+                <span x-text="p.text"></span>
+                <small class="gloss" x-show="gloss(p)" x-text="gloss(p)"></small>
+              </button>
+            </template>
+          </div>
+          <input class="input" data-testid="cta" x-model="draft.cta" @input.debounce.300ms="checkCta()"
+                 :placeholder="t('c.ctaHint')" :aria-label="t('c.cta')">
+          <p class="hint warn" role="alert" x-show="ctaBanned.length" data-testid="cta-warn">
+            <span x-text="t('c.ctaBanned')"></span> <b x-text="ctaBanned.join(', ')"></b>
+          </p>
+          <p class="hint ok" x-show="ctaOk" data-testid="cta-ok" x-text="t('c.ctaOk')"></p>
+        </div>
+
+        <div class="row2">
+          <label class="field">
+            <span x-text="t('c.lang')"></span>
+            <select class="select" data-testid="lang" x-model="draft.lang" @change="onLangChange()">
+              <template x-for="l in catalog.languages" :key="l.key">
+                <option :value="l.key" x-text="l.name"></option>
+              </template>
+            </select>
+          </label>
+          <label class="field">
+            <span x-text="t('c.name')"></span>
+            <input class="input" x-model="draft.name" :placeholder="t('c.nameHint')">
+          </label>
+        </div>
+
+        <div class="row">
+          <button class="btn btn-primary" type="button" data-testid="add-set" @click="addSet()"
+                  :disabled="!draft.headline.trim() || !draft.cta.trim()"
+                  x-text="editing === null ? t('c.add') : t('c.save')"></button>
+          <button class="btn" type="button" x-show="editing !== null" @click="resetDraft()"
+                  x-text="t('common.cancel')"></button>
+        </div>
+      </div>
+
+      <div class="stack">
+        <div class="card">
+          <h2><span x-text="t('c.list')"></span> <b class="pill" x-text="sets.length"></b></h2>
+          <p class="empty" x-show="!sets.length" x-text="t('c.empty')"></p>
+          <ul class="setlist" data-testid="set-list">
+            <template x-for="(s, i) in sets" :key="s.id">
+              <li class="setitem">
+                <div class="setmain">
+                  <b x-text="s.headline"></b>
+                  <small x-text="s.description"></small>
+                  <span class="tags">
+                    <span class="tag" x-text="langName(s.lang)"></span>
+                    <span class="tag" x-text="s.cta"></span>
+                  </span>
+                </div>
+                <div class="setact">
+                  <button class="btn btn-sm" type="button" @click="editSet(i)" x-text="t('common.edit')"></button>
+                  <button class="btn btn-sm btn-danger" type="button" :data-testid="'del-' + i"
+                          @click="removeSet(i)" x-text="t('common.delete')"></button>
+                </div>
+              </li>
+            </template>
+          </ul>
+        </div>
+
+        <div class="card">
+          <h2 x-text="t('c.import')"></h2>
+          <div class="row">
+            <button class="btn" type="button" data-testid="pick-csv" @click="pickCsv()"
+                    x-text="t('c.importCsv')"></button>
+            <button class="btn" type="button" data-testid="lib-toggle" @click="toggleLibrary()"
+                    x-text="t('lib.title')"></button>
+          </div>
+          <p class="hint" x-text="t('c.importHint')"></p>
+          <ul class="errs" x-show="csvErrors.length" role="alert">
+            <template x-for="e in csvErrors" :key="e"><li x-text="e"></li></template>
+          </ul>
+
+          <div class="lib" x-show="showLibrary">
+            <div class="row">
+              <input class="input" x-model="libName" :placeholder="t('lib.name')" :aria-label="t('lib.name')">
+              <button class="btn" type="button" @click="saveLib()" :disabled="!libName.trim()"
+                      x-text="t('common.save')"></button>
+            </div>
+            <ul class="setlist">
+              <template x-for="it in libItems" :key="it.name">
+                <li class="setitem">
+                  <div class="setmain"><b x-text="it.name"></b>
+                    <small x-text="it.sets + ' ' + t('lib.sets')"></small></div>
+                  <div class="setact">
+                    <button class="btn btn-sm" type="button" @click="loadLib(it.name)" x-text="t('lib.open')"></button>
+                    <button class="btn btn-sm btn-danger" type="button" @click="delLib(it.name)"
+                            x-text="t('common.delete')"></button>
+                  </div>
+                </li>
+              </template>
+            </ul>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2 x-text="t('c.ref')"></h2>
+          <label class="drop" data-testid="drop" @dragover.prevent="dragging = true"
+                 @dragleave="dragging = false" @drop.prevent="onDropImage($event)" :class="{ over: dragging }">
+            <span x-text="t('c.refHint')"></span>
+            <input type="file" accept="image/*" class="file" :aria-label="t('c.ref')" @change="onPickImage($event)">
+          </label>
+          <div class="suggest" x-show="suggestion" data-testid="suggest">
+            <span class="swatch" :style="suggestion ? `background:${suggestion.dominant}` : ''"
+                  :title="t('c.refDominant')"></span>
+            <span x-text="t('c.refFound') + ' ' + (suggestion ? suggestion.scheme_name : '')"></span>
+            <template x-if="suggestion && suggestion.accent">
+              <span class="suggest">
+                <span class="swatch" :style="`background:${suggestion.accent}`" :title="t('c.refAccent')"></span>
+                <span x-text="t('c.refAccent')"></span>
+              </span>
+            </template>
+            <button class="btn btn-sm" type="button" data-testid="apply-suggest"
+                    @click="applySuggestion()" x-text="t('c.refApply')"></button>
+          </div>
+          <div class="reflayout" x-show="suggestion && suggestion.layout_found" data-testid="ref-layout">
+            <b x-text="t('c.refLayout')"></b>
+            <ul class="blocks">
+              <template x-for="b in (suggestion ? suggestion.blocks : [])" :key="b.element">
+                <li>
+                  <span class="swatch sm" :style="`background:${b.color}`"></span>
+                  <span x-text="blockLabel(b)"></span>
+                </li>
+              </template>
+            </ul>
+            <button class="btn btn-primary btn-sm" type="button" data-testid="apply-layout"
+                    @click="applyLayout()" x-text="t('c.refApplyLayout')"></button>
+          </div>
+          <p class="hint" x-text="t('c.refLimit')"></p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ Bước 2: Cấu hình ============ -->
+    <section class="cols" x-show="step === 2">
+      <div class="stack">
+        <div class="card">
+          <h2 x-text="t('d.sizes')"></h2>
+          <div class="chips">
+            <template x-for="g in ['all','display','mobile','other']" :key="g">
+              <button class="chip" type="button" :class="{ on: sizeFilter === g }" @click="sizeFilter = g"
+                      x-text="t('d.group.' + g)"></button>
+            </template>
+          </div>
+          <div class="sizegrid" data-testid="size-grid">
+            <template x-for="s in visibleSizes" :key="s.key">
+              <label class="sizebox" :class="{ on: sizes.includes(s.key) }">
+                <input type="checkbox" :checked="sizes.includes(s.key)" @change="toggleSize(s.key)"
+                       :aria-label="s.key">
+                <b x-text="s.key"></b>
+              </label>
+            </template>
+          </div>
+          <div class="row wrap">
+            <button class="btn btn-sm" type="button" @click="selectAllSizes(true)" x-text="t('d.selectAll')"></button>
+            <button class="btn btn-sm" type="button" @click="selectAllSizes(false)" x-text="t('d.selectNone')"></button>
+            <input class="input input-sm" x-model="customSize" placeholder="400x400" :aria-label="t('d.custom')"
+                   @keydown.enter="addCustomSize()">
+            <button class="btn btn-sm" type="button" data-testid="add-size" @click="addCustomSize()"
+                    x-text="t('d.add')"></button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2 x-text="t('d.scheme')"></h2>
+          <div class="scgrid">
+            <template x-for="s in catalog.schemes" :key="s.key">
+              <button class="sc" type="button" :class="{ on: design.schemes.includes(s.key) }"
+                      :data-testid="'scheme-' + s.key" @click="toggleScheme(s.key)">
+                <span class="sc-sw" :style="`background:${s.bg};border-color:${s.border}`"></span>
+                <span x-text="s.name"></span>
+              </button>
+            </template>
+          </div>
+
+          <h2 class="mt" x-text="t('d.gradient')"></h2>
+          <div class="chips">
+            <button class="chip" type="button" :class="{ on: design.gradient === 'none' }"
+                    @click="design.gradient = 'none'; refresh()" x-text="t('common.none')"></button>
+            <template x-for="g in catalog.gradients" :key="g.key">
+              <button class="chip grad" type="button" :class="{ on: design.gradient === g.key }"
+                      :style="`background:linear-gradient(135deg,${g.from},${g.to})`"
+                      @click="design.gradient = g.key; refresh()" x-text="g.name"></button>
+            </template>
+          </div>
+
+          <h2 class="mt" x-text="t('d.animation')"></h2>
+          <div class="chips">
+            <template x-for="a in catalog.animations" :key="a">
+              <button class="chip" type="button" :class="{ on: design.animation === a }"
+                      @click="design.animation = a; refresh()" x-text="t('anim.' + a)"></button>
+            </template>
+          </div>
+
+          <h2 class="mt" x-text="t('d.badge')"></h2>
+          <div class="chips">
+            <template x-for="b in catalog.badges" :key="b.key">
+              <button class="chip" type="button" :class="{ on: design.badges.includes(b.key) }"
+                      :data-testid="'badge-' + b.key" @click="toggleBadge(b.key)" x-text="b.label"></button>
+            </template>
+          </div>
+
+          <h2 class="mt" x-text="t('d.adFormat')"></h2>
+          <div class="chips">
+            <template x-for="f in (catalog.ad_formats || [])" :key="f">
+              <button class="chip" type="button" :class="{ on: design.ad_format === f }"
+                      :data-testid="'ad-format-' + f" @click="design.ad_format = f; refresh()"
+                      x-text="t('adformat.' + f)"></button>
+            </template>
+          </div>
+          <p class="hint" x-text="t('adformat.' + design.ad_format + 'Hint')"></p>
+
+          <h2 class="mt" x-text="t('d.ctaStyle')"></h2>
+          <div class="chips">
+            <template x-for="st in (catalog.cta_styles || [])" :key="st">
+              <button class="chip" type="button" :class="{ on: design.cta_style === st }"
+                      :data-testid="'cta-style-' + st" @click="design.cta_style = st; refresh()"
+                      x-text="t('ctastyle.' + st)"></button>
+            </template>
+          </div>
+
+          <label class="check"><input type="checkbox" data-testid="cta-pulse" x-model="design.cta_pulse"
+                                      @change="refresh()">
+            <span><b x-text="t('d.ctaPulse')"></b><small x-text="t('d.ctaPulseHint')"></small></span></label>
+
+          <h2 class="mt" x-text="t('d.ctaColor')"></h2>
+          <div class="chips">
+            <button class="chip" type="button" :class="{ on: !design.cta_color }"
+                    data-testid="cta-color-auto" @click="design.cta_color = ''; refresh()"
+                    x-text="t('d.ctaColorAuto')"></button>
+            <template x-for="hex in (catalog.cta_colors || [])" :key="hex">
+              <button class="chip swatch-chip" type="button" :class="{ on: design.cta_color === hex }"
+                      :data-testid="'cta-color-' + hex.slice(1)" @click="design.cta_color = hex; refresh()"
+                      :aria-label="hex">
+                <span class="swatch sm" :style="`background:${hex}`"></span>
+              </button>
+            </template>
+            <label class="chip swatch-chip" :title="t('d.ctaColorCustom')">
+              <input type="color" class="colorpick" data-testid="cta-color-custom"
+                     :value="design.cta_color || '#1a73e8'" :aria-label="t('d.ctaColorCustom')"
+                     @input.debounce.200ms="design.cta_color = $event.target.value; refresh()">
+              <span x-text="t('d.ctaColorCustom')"></span>
+            </label>
+          </div>
+
+          <h2 class="mt" x-text="t('d.layout')"></h2>
+          <div class="chips">
+            <template x-for="l in catalog.layouts" :key="l">
+              <button class="chip" type="button" :class="{ on: design.layout === l }"
+                      @click="design.layout = l; refresh()" x-text="t('layout.' + l)"></button>
+            </template>
+          </div>
+        </div>
+      </div>
+
+      <div class="stack">
+        <div class="card sticky">
+          <h2 x-text="t('d.preview')"></h2>
+          <label class="field">
+            <span x-text="t('d.previewSize')"></span>
+            <select class="select" x-model="previewSize" @change="refresh()" data-testid="preview-size">
+              <template x-for="k in sizes" :key="k"><option :value="k" x-text="k"></option></template>
+            </select>
+          </label>
+          <div class="pvwrap">
+            <iframe class="pv" data-testid="live-preview" :srcdoc="previewHtml" :width="pvW" :height="pvH"
+                    :title="t('d.preview')" sandbox="allow-scripts"></iframe>
+          </div>
+          <button class="btn" type="button" data-testid="tune" @click="tune()"
+                  x-text="t('d.tune')"></button>
+          <ul class="errs" x-show="previewWarnings.length" role="alert">
+            <template x-for="w in previewWarnings" :key="w"><li x-text="w"></li></template>
+          </ul>
+          <div class="total" data-testid="total">
+            <b x-text="total"></b> <span x-text="t('d.creatives')"></span>
+            <small x-text="`${sets.length} × ${sizes.length} × ${design.schemes.length} × ${Math.max(1, design.badges.length)}`"></small>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ Bước 3: Xem trước & chỉnh trực tiếp ============ -->
+    <section x-show="step === 3">
+      <div class="card">
+        <h2 x-text="t('p.title')"></h2>
+        <div class="row wrap">
+          <label class="field inline">
+            <span x-text="t('p.size')"></span>
+            <select class="select" x-model="gridFilter" @change="loadGrid()" data-testid="size-select">
+              <option value="all" x-text="t('p.allSizes')"></option>
+              <template x-for="k in sizes" :key="k"><option :value="k" x-text="k"></option></template>
+            </select>
+          </label>
+          <span class="hint" x-text="t('p.hint')"></span>
+        </div>
+        <div class="row wrap">
+          <b data-testid="kept" x-text="`${total}/${totalAll} ${t('p.kept')}`"></b>
+          <button class="btn btn-sm" type="button" data-testid="keep-all" @click="keepAll(true)"
+                  x-text="t('d.selectAll')"></button>
+          <button class="btn btn-sm" type="button" data-testid="keep-none" @click="keepAll(false)"
+                  x-text="t('p.dropShown')"></button>
+        </div>
+        <p class="hint" aria-live="polite" x-show="gridLoading"
+           x-text="t('p.loading') + ' ' + gridDone + '/' + gridItems.length"></p>
+
+        <div class="grid" data-testid="preview-grid">
+          <template x-for="c in gridItems" :key="c.key">
+            <figure class="gcard" :class="{ sel: sel.key === c.key, off: !kept(c) }">
+              <div class="shrink"
+                   :style="`width:${Math.round(c.w * gridScale(c))}px;height:${Math.round(c.h * gridScale(c))}px`">
+                <div class="cv" x-show="c.boxes.length"
+                     :style="`width:${c.w}px;height:${c.h}px;transform:scale(${gridScale(c)});` + bgStyle(c)">
+                  <template x-for="b in c.boxes" :key="b.element">
+                    <div class="cbox" :data-testid="'box-' + c.key + '-' + b.element"
+                         :class="{ sel: sel.key === c.key && sel.element === b.element }"
+                         :style="boxStyle(c, b)" tabindex="0" role="button"
+                         :aria-label="t('el.' + b.element)" :title="t('el.' + b.element)"
+                         @pointerdown="startDrag($event, c, b)" @focus="select(c, b.element)"
+                         @keydown="onKey($event, c, b)">
+                      <template x-for="(ln, i) in b.lines" :key="i">
+                        <div class="ln" x-text="ln"></div>
+                      </template>
+                      <span class="grip grip-w" x-show="sel.key === c.key && sel.element === b.element
+                            && (catalog.width_elements || []).includes(b.element)"
+                            :data-testid="'grip-w-' + b.element" :title="t('p.gripWidth')"
+                            :style="`transform:scale(${1 / gridScale(c)});transform-origin:center right`"
+                            @pointerdown.stop="startResize($event, c, b, 'width')"></span>
+                      <span class="grip grip-f" x-show="sel.key === c.key && sel.element === b.element"
+                            :data-testid="'grip-f-' + b.element" :title="t('p.gripFont')"
+                            :style="`transform:scale(${1 / gridScale(c)});transform-origin:bottom right`"
+                            @pointerdown.stop="startResize($event, c, b, 'font')"></span>
+                    </div>
+                  </template>
+                </div>
+                <div class="skel" x-show="!c.boxes.length"></div>
+              </div>
+
+              <figcaption>
+                <label class="keep">
+                  <input type="checkbox" :data-testid="'keep-' + c.key" :checked="kept(c)"
+                         @change="toggleKeep(c)" :aria-label="t('p.keep') + ' ' + c.label">
+                  <span x-text="c.label"></span>
+                </label>
+                <b class="tag" x-show="hasOverride(c)" x-text="t('p.edited')"></b>
+              </figcaption>
+
+              <div class="tuner" x-show="sel.key === c.key" :data-testid="'tuner-' + c.key">
+                <template x-if="sel.element">
+                  <div class="row wrap">
+                    <b x-text="t('el.' + sel.element)"></b>
+                    <button class="btn btn-sm" type="button" data-testid="font-smaller" @click="bump(c, -0.1)"
+                            :aria-label="t('p.smaller')">A−</button>
+                    <b class="pct" data-testid="font-pct" x-text="Math.round(scaleOf(c, sel.element) * 100) + '%'"></b>
+                    <button class="btn btn-sm" type="button" data-testid="font-bigger" @click="bump(c, 0.1)"
+                            :aria-label="t('p.bigger')">A+</button>
+                    <button class="btn btn-sm" type="button" data-testid="apply-all" @click="copyToSize(c)"
+                            x-text="t('p.applyAll')"></button>
+                    <button class="btn btn-sm btn-danger" type="button" data-testid="reset-one"
+                            @click="resetCreative(c)" x-text="t('p.resetAll')"></button>
+                  </div>
+                </template>
+                <span class="hint" x-show="!sel.element" x-text="t('p.pickElement')"></span>
+              </div>
+            </figure>
+          </template>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ Bước 4: Xuất ============ -->
+    <section class="cols" x-show="step === 4">
+      <div class="card">
+        <h2 x-text="t('e.title')"></h2>
+
+        <div class="field">
+          <span x-text="t('e.format')"></span>
+          <label class="check"><input type="checkbox" data-testid="opt-html" x-model="exportOpt.html">
+            <span><b x-text="t('e.html')"></b><small x-text="t('e.htmlHint')"></small></span></label>
+          <label class="check"><input type="checkbox" data-testid="opt-png" x-model="exportOpt.png">
+            <span><b x-text="t('e.png')"></b><small x-text="t('e.pngHint')"></small></span></label>
+          <div class="chips indent" x-show="exportOpt.png">
+            <span class="hint" x-text="t('e.pngScale')"></span>
+            <template x-for="k in (catalog.png_scales || [])" :key="k">
+              <button class="chip" type="button" :class="{ on: exportOpt.png_scale === k }"
+                      :data-testid="'png-scale-' + k" @click="exportOpt.png_scale = k"
+                      x-text="k + '×'"></button>
+            </template>
+            <span class="hint" x-show="sizes.length"
+                  x-text="`${sizes[0]} → ${pngPixels(sizes[0])}`"></span>
+          </div>
+          <p class="hint warn" role="alert" x-show="!exportOpt.html && !exportOpt.png"
+             x-text="t('e.needFormat')"></p>
+        </div>
+
+        <p class="summary" data-testid="summary" x-show="exportOpt.html || exportOpt.png">
+          <b x-text="total"></b>
+          <span x-text="exportOpt.html ? t('e.willHtml') : t('e.willPng')"></span>
+        </p>
+
+        <label class="field">
+          <span x-text="t('e.output')"></span>
+          <div class="row">
+            <input class="input" data-testid="output-dir" x-model.trim="outputDir" :placeholder="t('e.outputHint')"
+                   :aria-label="t('e.output')">
+            <button class="btn" type="button" data-testid="pick-dir" @click="pickDir()"
+                    x-text="t('common.browse')"></button>
+          </div>
+        </label>
+
+        <label class="field">
+          <span x-text="t('e.clickUrl')"></span>
+          <input class="input" data-testid="click-url" x-model.trim="exportOpt.click_url"
+                 placeholder="https://..." :aria-label="t('e.clickUrl')">
+        </label>
+
+        <div class="field">
+          <span x-text="t('e.groupBy')"></span>
+          <div class="chips">
+            <template x-for="g in catalog.group_by" :key="g">
+              <button class="chip" type="button" :class="{ on: exportOpt.group_by === g }"
+                      @click="exportOpt.group_by = g" x-text="t('group.' + g)"></button>
+            </template>
+          </div>
+        </div>
+
+        <label class="check"><input type="checkbox" x-model="exportOpt.manifest">
+          <span><b x-text="t('e.manifest')"></b><small x-text="t('e.manifestHint')"></small></span></label>
+        <label class="check"><input type="checkbox" x-model="exportOpt.preview">
+          <span><b x-text="t('e.previewPage')"></b><small x-text="t('e.previewPageHint')"></small></span></label>
+        <label class="check"><input type="checkbox" x-model="exportOpt.zip_all">
+          <span><b x-text="t('e.zipAll')"></b><small x-text="t('e.zipAllHint')"></small></span></label>
+
+        <div class="row mt">
+          <button class="btn btn-primary btn-big" type="button" data-testid="run" @click="run()"
+                  :disabled="job.status === 'running' || !outputDir || !total
+                             || (!exportOpt.html && !exportOpt.png)"
+                  x-text="t('e.run') + ' (' + total + ')'"></button>
+          <button class="btn" type="button" x-show="job.status === 'running'" @click="stop()"
+                  x-text="t('e.stop')"></button>
+        </div>
+      </div>
+
+      <div class="card" aria-live="polite">
+        <h2 x-text="t('e.progress')"></h2>
+        <p class="empty" x-show="job.status === 'idle'" x-text="t('e.notRun')"></p>
+        <template x-if="job.status !== 'idle'">
+          <div>
+            <progress class="progress" :max="job.total || 1" :value="job.done"></progress>
+            <p data-testid="status">
+              <b x-text="t('status.' + job.status)"></b>
+              <span x-show="job.total" x-text="` — ${job.done}/${job.total}`"></span>
+            </p>
+            <p class="error" role="alert" x-show="job.error" x-text="job.error"></p>
+            <div class="done" x-show="job.status === 'done' || job.status === 'stopped'">
+              <p x-text="t('e.savedTo')"></p>
+              <code class="path" x-text="job.folder"></code>
+              <code class="path" x-show="job.zip_path" x-text="job.zip_path"></code>
+              <button class="btn" type="button" data-testid="open-folder" @click="reveal(job.folder)"
+                      x-text="t('e.openFolder')"></button>
+            </div>
+            <ul class="errs" x-show="(job.warnings || []).length" role="alert">
+              <template x-for="w in job.warnings" :key="w"><li x-text="w"></li></template>
+            </ul>
+            <ul class="errs" x-show="(job.failed || []).length" role="alert">
+              <template x-for="f in job.failed" :key="f.name"><li x-text="`${f.name}: ${f.error}`"></li></template>
+            </ul>
+          </div>
+        </template>
+      </div>
+    </section>
+
+    <nav class="nav">
+      <button class="btn" type="button" data-testid="back" @click="goto(step - 1)" x-show="step > 1"
+              x-text="t('common.back')"></button>
+      <button class="btn btn-primary" type="button" data-testid="next" @click="goto(step + 1)" x-show="step < 4"
+              :disabled="!sets.length || (step === 2 && !sizes.length)" x-text="t('common.next')"></button>
+    </nav>
+  </main>
+</div>
+</body>
+</html>
